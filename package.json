@@ -1,0 +1,19 @@
+{
+  "name": "content-lint",
+  "version": "1.0.0",
+  "description": "Content linting API for Figma plugin",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.2.1",
+    "@supabase/supabase-js": "^2.39.0",
+    "p-queue": "^8.1.0"
+  },
+  "devDependencies": {
+    "vercel": "^46.0.2"
+  }
+}
