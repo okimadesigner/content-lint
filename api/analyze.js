@@ -572,7 +572,7 @@ async function analyzeWithGeminiDynamic(textLayers, guidelines, guidelinesHash, 
     try {
       console.log(`🔍 Dynamic analysis: ${textLayers.length} layers, ${guidelines.length} guidelines, attempt ${3 - retries}`);
 
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${process.env.GEMINI_API_KEY}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`, {
         method: 'POST',
         signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
@@ -820,7 +820,7 @@ export default async function handler(req, res) {
     clearTimeout(globalTimeout);
     return res.status(200).json({
       status: 'dynamic-guideline-driven-system',
-      model: 'gemini-2.5-flash-dynamic',
+      model: 'gemini-2.5-flash-lite',
       version: '8.0',
       features: [
         'dynamic_guideline_processing',
