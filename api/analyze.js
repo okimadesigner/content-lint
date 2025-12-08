@@ -2,6 +2,10 @@ import { createClient } from '@supabase/supabase-js';
 import fetch from 'node-fetch';
 import crypto from 'crypto';
 
+// Add this constant at the top with other configs
+const MAX_LAYERS_PER_REQUEST = 25;
+const OPTIMAL_BATCH_SIZE = 12;
+
 // Init Supabase
 let supabase;
 try {
@@ -846,10 +850,29 @@ export default async function handler(req, res) {
     }
 
     const { textLayers, clientHints } = req.body || {};
+
+    // ✅ ENFORCE BATCH-ONLY ARCHITECTURE
     if (!Array.isArray(textLayers) || textLayers.length === 0) {
       clearTimeout(globalTimeout);
-      return res.status(400).json({ success: false, error: 'Valid textLayers required' });
+      return res.status(400).json({
+        success: false,
+        error: 'Valid textLayers required'
+      });
     }
+
+    if (textLayers.length > MAX_LAYERS_PER_REQUEST) {
+      clearTimeout(globalTimeout);
+      return res.status(400).json({
+        success: false,
+        error: `Too many layers. Max ${MAX_LAYERS_PER_REQUEST} per request.`,
+        hint: 'Split into batches on client side',
+        layersReceived: textLayers.length,
+        maxAllowed: MAX_LAYERS_PER_REQUEST,
+        suggestedBatches: Math.ceil(textLayers.length / MAX_LAYERS_PER_REQUEST)
+      });
+    }
+
+    console.log(`📊 Batch request: ${textLayers.length}/${MAX_LAYERS_PER_REQUEST} layers`);
 
     const optimizationHint = clientHints?.optimizationHint || 'unknown';
     const totalOriginalLayers = clientHints?.totalLayers || textLayers.length;
@@ -940,16 +963,19 @@ if (cachedGuidelinesHash === guidelinesHash && guidelinesCache) {
           results.push(...createOptimizedFallback(uncachedLayers, 'insufficient_time', guidelinesHash));
         } else {
           try {
-            // ENHANCED: Use dynamic guideline-driven analysis
-            const geminiResults = await analyzeWithGeminiDynamicWithRelationships(uncachedLayers, guidelines, guidelinesHash, timeRemaining - 1000);
+            // ✅ SIMPLIFIED: No internal batching needed anymore
+            // Single Gemini call handles ≤25 layers easily
+            const geminiResults = await analyzeWithGeminiDynamic(
+              uncachedLayers,
+              guidelines,
+              guidelinesHash,
+              timeRemaining - 1000
+            );
+
+            // Cache and store relationships
+            await cacheCorrectionsAsCompliantWithRelationships(geminiResults, guidelinesHash);
             results.push(...geminiResults);
 
-            // Cache original results with higher timeout
-            geminiResults.forEach(result => {
-              if (!result.fallback) {
-                setCachedAnalysisWithTimeout(result.originalText, guidelinesHash, result, 8000);
-              }
-            });
           } catch (err) {
             console.error('Gemini analysis failed:', err.message);
             results.push(...createOptimizedFallback(uncachedLayers, err.message, guidelinesHash));
