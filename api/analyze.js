@@ -431,11 +431,7 @@ function extractComprehensiveRules(guidelines) {
   return allRules;
 }
 
-/**
- * Create dynamic system prompt based on actual guidelines structure
- */
 function createDynamicSystemPrompt(guidelines, guidelinesHash) {
-  // Group guidelines by category
   const categorizedGuidelines = {};
   guidelines.forEach(guideline => {
     const category = guideline.category || 'general';
@@ -445,83 +441,86 @@ function createDynamicSystemPrompt(guidelines, guidelinesHash) {
     categorizedGuidelines[category].push(guideline);
   });
 
-  // Build comprehensive rules section
-  let rulesSection = '\n\nCOMPREHENSIVE GUIDELINES TO CHECK:\n';
+  let rulesSection = '\n\nGUIDELINES TO ENFORCE:\n';
 
   Object.entries(categorizedGuidelines).forEach(([category, categoryGuidelines]) => {
-    rulesSection += `\n## ${category.toUpperCase()} GUIDELINES:\n`;
+    rulesSection += `\n## ${category.toUpperCase()}:\n`;
 
     categoryGuidelines.forEach((guideline, index) => {
       rulesSection += `\n${index + 1}. ${guideline.title}:\n`;
 
-      // Process rules dynamically
       const rulesData = typeof guideline.rules === 'string'
         ? (() => { try { return JSON.parse(guideline.rules); } catch { return {}; } })()
         : guideline.rules || {};
 
-      // Create rule descriptions from the actual structure
-      const ruleDescriptions = generateRuleDescriptions(rulesData, guideline.category);
-      ruleDescriptions.forEach(desc => {
-        rulesSection += `   - ${desc}\n`;
+      // Extract and inject detection patterns if present
+      if (rulesData.detect_patterns && Array.isArray(rulesData.detect_patterns)) {
+        rulesSection += `   🔍 DETECT: ${rulesData.detect_patterns.join(' | ')}\n`;
+      }
+
+      // Extract exclude patterns
+      if (rulesData.exclude_patterns && Array.isArray(rulesData.exclude_patterns)) {
+        rulesSection += `   🚫 EXCLUDE: ${rulesData.exclude_patterns.join(' | ')}\n`;
+      }
+
+      // Extract flat rules (not nested descriptions)
+      Object.entries(rulesData).forEach(([key, value]) => {
+        if (typeof value === 'string') {
+          rulesSection += `   • ${key}: ${value}\n`;
+        } else if (typeof value === 'object' && Array.isArray(value)) {
+          rulesSection += `   • ${key}: ${value.join(', ')}\n`;
+        }
       });
 
-      // Add examples if available
+      // Add examples
       if (guideline.examples) {
         const { correct = [], incorrect = [] } = guideline.examples;
         if (correct.length > 0) {
-          rulesSection += `   ✅ Correct: ${correct.slice(0, 3).join(', ')}\n`;
+          rulesSection += `   ✅ ${correct.slice(0, 2).join(' | ')}\n`;
         }
         if (incorrect.length > 0) {
-          rulesSection += `   ❌ Incorrect: ${incorrect.slice(0, 3).join(', ')}\n`;
+          rulesSection += `   ❌ ${incorrect.slice(0, 2).join(' | ')}\n`;
         }
       }
     });
   });
 
-  return `You are a COMPREHENSIVE compliance text analyzer for Indian UI content. You MUST find ALL violations based on the provided guidelines.
+  return `You are a PRECISE compliance analyzer for Indian UI content. Version: ${guidelinesHash}
 
-Guidelines Version: ${guidelinesHash}
-
-ANALYSIS INSTRUCTIONS:
-- Analyze text against ALL provided guidelines systematically
-- Check EVERY aspect mentioned in the guidelines below
-- Pay special attention to formatting, terminology, grammar, punctuation, and style
-- Look for violations in numbers, dates, times, abbreviations, and language usage
-- Apply corrections based on the specific rules provided
+CRITICAL CONTEXT:
+- Client already fixed mechanical issues (currency symbols, basic commas, obvious errors)
+- Focus on SEMANTIC, CONTEXTUAL, and TONE violations that regex cannot catch
+- Be confident: Only flag clear violations with ≥85% certainty
 
 ${rulesSection}
 
-DETECTION METHODOLOGY:
-1. Scan text for patterns that violate any of the above guidelines
-2. Check formatting consistency (numbers, dates, times)
-3. Verify terminology against preferred terms
-4. Validate grammar and punctuation rules
-5. Ensure tone and voice compliance
-6. Apply all corrections systematically
+ANALYSIS METHOD:
+1. Check tone appropriateness (error/success/info context)
+2. Validate complex number formatting (Lakh/Crore usage)
+3. Detect passive voice patterns
+4. Check UK vs US spelling variants
+5. Verify punctuation context (heading vs body)
+6. Assess politeness overuse (multiple please/sorry)
 
-RESPONSE FORMAT - EXACT JSON:
+RESPONSE FORMAT - STRICT JSON:
 [{
-  "id": "layer_id_from_input",
+  "id": "layer_id",
   "hasViolations": true/false,
-  "violations": [
-    {
-      "original": "exact violating text found",
-      "suggested": "correct replacement per guidelines",
-      "confidence": 0.85-0.99,
-      "ruleCategory": "category from guidelines",
-      "ruleDescription": "specific rule violated"
-    }
-  ],
-  "correctedText": "complete corrected version with ALL fixes applied",
+  "violations": [{
+    "original": "exact text",
+    "suggested": "corrected text",
+    "confidence": 0.85-0.99,
+    "ruleCategory": "tone/localisation/grammar/etc",
+    "ruleDescription": "specific rule violated"
+  }],
+  "correctedText": "full corrected version",
   "confidence": 0.85-0.99
 }]
 
-CRITICAL REQUIREMENTS:
-- Apply corrections from ALL applicable guidelines
-- Maintain high confidence scores (0.85+) for clear violations
-- Ensure correctedText reflects ALL identified fixes
-- Be thorough - check every guideline category
-- Return complete corrected text even for single violations`;
+IMPORTANT:
+- If client already fixed it, do not re-flag
+- Only suggest changes you are confident about (≥85%)
+- correctedText must apply ALL fixes from violations array`;
 }
 
 /**
@@ -877,6 +876,7 @@ export default async function handler(req, res) {
     const optimizationHint = clientHints?.optimizationHint || 'unknown';
     const totalOriginalLayers = clientHints?.totalLayers || textLayers.length;
     const estimatedCompliant = clientHints?.estimatedCompliant || 0;
+    const tier1PreProcessed = clientHints?.tier1PreProcessed || 0;
 
     console.log(`📊 Dynamic analysis starting: ${textLayers.length}/${totalOriginalLayers} layers (${estimatedCompliant} pre-filtered), ${HARD_TIMEOUT}ms limit`);
 
