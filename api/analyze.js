@@ -465,7 +465,10 @@ function createDynamicSystemPrompt(guidelines, guidelinesHash) {
 
       // Extract flat rules (not nested descriptions)
       Object.entries(rulesData).forEach(([key, value]) => {
-        if (typeof value === 'string') {
+        if (key === 'date_format' && typeof value === 'string') {
+          rulesSection += `   • ${key}: ${value}\n`;
+          rulesSection += `     DD/MM/YYYY for compact display. "15 October, 2023" is VALID when space permits. Only flag: MM/DD/YYYY, ordinals (15th), or YYYY/MM/DD.\n`;
+        } else if (typeof value === 'string') {
           rulesSection += `   • ${key}: ${value}\n`;
         } else if (typeof value === 'object' && Array.isArray(value)) {
           rulesSection += `   • ${key}: ${value.join(', ')}\n`;
