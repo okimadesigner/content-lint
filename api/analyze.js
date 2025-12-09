@@ -335,8 +335,50 @@ function extractRulesRecursively(obj, parentCategory = '', parentId = '', path =
   Object.entries(obj).forEach(([key, value]) => {
     const currentPath = [...path, key];
 
+    // Handle objects with enforcement_context - preserve contextual logic
+    if (typeof value === 'object' && value !== null && value.enforcement_context) {
+      const ruleId = `${parentId}-${currentPath.join('-')}`;
+      const context = value.enforcement_context;
+
+      // Build contextual description from enforcement_context
+      let contextDescription = value.description || `${key} rule`;
+
+      if (context.ideal) {
+        contextDescription += `. Prefer "${context.ideal}" when space allows`;
+      }
+      if (context.abbreviation) {
+        contextDescription += `. Use "${context.abbreviation}" only under space constraints`;
+      }
+      if (context.required_triggers) {
+        contextDescription += `. Only applies when: ${context.required_triggers.join(', ')}`;
+      }
+      if (context.exclude_patterns) {
+        contextDescription += `. EXCEPT: ${context.exclude_patterns.join(', ')}`;
+      }
+      if (context.when_space_constrained !== undefined) {
+        contextDescription += context.when_space_constrained ?
+          '. Use abbreviated forms when space is constrained' :
+          '. Full forms preferred regardless of space';
+      }
+      if (context.avoid) {
+        contextDescription += `. Avoid: ${context.avoid}`;
+      }
+
+      extractedRules.push({
+        id: ruleId,
+        category: parentCategory,
+        path: currentPath.join(' → '),
+        key: key,
+        description: contextDescription,
+        value: contextDescription,
+        enforcement_context: context, // Preserve full context for prompt generation
+        severity: 'medium',
+        ruleType: 'contextual_rule',
+        examples: []
+      });
+    }
     // If value is an object/array, recurse deeper
-    if (typeof value === 'object' && value !== null) {
+    else if (typeof value === 'object' && value !== null) {
       extractedRules.push(...extractRulesRecursively(value, parentCategory, parentId, currentPath));
     } else if (typeof value === 'string') {
       // Extract string rules
@@ -432,6 +474,9 @@ function extractComprehensiveRules(guidelines) {
 }
 
 function createDynamicSystemPrompt(guidelines, guidelinesHash) {
+  // Generate comprehensive rules first to access contextual information
+  const allRules = extractComprehensiveRules(guidelines);
+
   const categorizedGuidelines = {};
   guidelines.forEach(guideline => {
     const category = guideline.category || 'general';
@@ -463,11 +508,51 @@ function createDynamicSystemPrompt(guidelines, guidelinesHash) {
         rulesSection += `   🚫 EXCLUDE: ${rulesData.exclude_patterns.join(' | ')}\n`;
       }
 
-      // Extract flat rules (not nested descriptions)
+      // Use contextual rules with enforcement_context (prioritize these)
+      const contextualRules = allRules.filter(rule =>
+        rule.category === category &&
+        rule.ruleType === 'contextual_rule' &&
+        rule.enforcement_context
+      );
+
+      contextualRules.forEach(rule => {
+        const context = rule.enforcement_context;
+        rulesSection += `   • ${rule.key}: ${rule.description}\n`;
+
+        // Add specific contextual guidance
+        if (context.ideal) {
+          rulesSection += `     → PREFER: "${context.ideal}" when space allows\n`;
+        }
+        if (context.abbreviation) {
+          rulesSection += `     → ABBREVIATE: "${context.abbreviation}" only when space is constrained\n`;
+        }
+        if (context.avoid) {
+          rulesSection += `     → AVOID: ${context.avoid}\n`;
+        }
+        if (context.required_triggers && context.required_triggers.length > 0) {
+          rulesSection += `     → ONLY WHEN: ${context.required_triggers.join(' OR ')}\n`;
+        }
+        if (context.exclude_patterns && context.exclude_patterns.length > 0) {
+          rulesSection += `     → EXCEPT: ${context.exclude_patterns.join(' | ')}\n`;
+        }
+        if (context.when_space_constrained !== undefined) {
+          rulesSection += context.when_space_constrained ?
+            `     → Use abbreviated forms when space is constrained\n` :
+            `     → Full forms preferred regardless of space constraints\n`;
+        }
+      });
+
+      // Fallback to legacy flat rules for non-contextual entries
       Object.entries(rulesData).forEach(([key, value]) => {
+        // Skip if we already processed this as a contextual rule
+        if (contextualRules.some(r => r.key === key)) return;
+
         if (key === 'date_format' && typeof value === 'string') {
           rulesSection += `   • ${key}: ${value}\n`;
           rulesSection += `     DD/MM/YYYY for compact display. "15 October, 2023" is VALID when space permits. Only flag: MM/DD/YYYY, ordinals (15th), or YYYY/MM/DD.\n`;
+        } else if (key === 'time_format' && typeof value === 'string') {
+          rulesSection += `   • ${key}: ${value}\n`;
+          rulesSection += `     "11:00 am to 12:00 pm" is VALID. Avoid unnecessary complexity.\n`;
         } else if (typeof value === 'string') {
           rulesSection += `   • ${key}: ${value}\n`;
         } else if (typeof value === 'object' && Array.isArray(value)) {
@@ -494,6 +579,7 @@ CRITICAL CONTEXT:
 - Client already fixed mechanical issues (currency symbols, basic commas, obvious errors)
 - Focus on SEMANTIC, CONTEXTUAL, and TONE violations that regex cannot catch
 - Be confident: Only flag clear violations with ≥85% certainty
+- RESPECT SPACE CONSTRAINTS: Use abbreviations only when necessary, prefer full forms when space allows
 
 ${rulesSection}
 
@@ -504,6 +590,7 @@ ANALYSIS METHOD:
 4. Check UK vs US spelling variants
 5. Verify punctuation context (heading vs body)
 6. Assess politeness overuse (multiple please/sorry)
+7. Honor contextual constraints (space, formality, brevity)
 
 RESPONSE FORMAT - STRICT JSON:
 [{
@@ -521,6 +608,9 @@ RESPONSE FORMAT - STRICT JSON:
 }]
 
 IMPORTANT:
+- RESPECT CONTEXT: If space allows, use preferred full forms over abbreviations
+- ALLOW VALID VARIATIONS: "15 October, 2023" and "11:00 am to 12:00 pm" are both acceptable
+- SINGLE "PLEASE" IS OK: Allow one instance of politeness without over-flagging
 - If client already fixed it, do not re-flag
 - Only suggest changes you are confident about (≥85%)
 - correctedText must apply ALL fixes from violations array`;
@@ -648,13 +738,44 @@ async function analyzeWithGeminiDynamic(textLayers, guidelines, guidelinesHash, 
           ruleDescription: v.ruleDescription || 'Guideline violation'
         })) : [];
 
-        if (hasViolations && processedViolations.length > 0) {
+        // Apply post-processing to filter false positives
+        const postProcessViolations = (originalText, violations) => {
+          return violations.filter(v => {
+            // ❌ Don't flag full date format as violation
+            if (v.ruleDescription?.includes('date') &&
+                /\b\d{1,2}\s+[A-Za-z]+\s*,?\s+\d{4}\b/.test(originalText)) {
+              return false; // e.g., "15 October, 2023" is valid
+            }
+            // ❌ Don't flag "to" in time ranges
+            if (v.ruleDescription?.includes('time') &&
+                /\b\d{1,2}:\d{2}\s+[ap]m\s+to\s+\d{1,2}:\d{2}\s+[ap]m\b/i.test(originalText)) {
+              return false; // e.g., "11:00 am to 12:00 pm" is valid
+            }
+            // ❌ Don't flag single "please"
+            if (v.original?.toLowerCase() === 'please' &&
+                (originalText.match(/\bplease\b/gi)?.length || 0) === 1) {
+              return false;
+            }
+            // ❌ Don't flag valid abbreviations when space allows full forms
+            if (v.suggested && v.suggested.length < v.original.length &&
+                /\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b/.test(v.original) &&
+                v.ruleDescription?.includes('space') === false) {
+              // Only flag abbreviations if explicit space constraint mentioned
+              return false;
+            }
+            return true;
+          });
+        };
+
+        const filteredViolations = postProcessViolations(originalText, processedViolations);
+
+        if (hasViolations && filteredViolations.length > 0) {
           if (!correctedText || correctedText === originalText) {
-            correctedText = generateFallbackCorrection(originalText, processedViolations);
+            correctedText = generateFallbackCorrection(originalText, filteredViolations);
           }
 
           let finalCorrectedText = correctedText;
-          processedViolations.forEach(v => {
+          filteredViolations.forEach(v => {
             if (finalCorrectedText.includes(v.original) && !finalCorrectedText.includes(v.suggested)) {
               finalCorrectedText = finalCorrectedText.replace(new RegExp(escapeRegExp(v.original), 'g'), v.suggested);
             }
@@ -662,15 +783,14 @@ async function analyzeWithGeminiDynamic(textLayers, guidelines, guidelinesHash, 
           correctedText = finalCorrectedText;
         }
 
-        if (correctedText === originalText && hasViolations) {
+        if (correctedText === originalText && hasViolations && filteredViolations.length === 0) {
           hasViolations = false;
-          processedViolations.length = 0;
         }
 
         return {
           id: result.id,
           hasViolations: hasViolations,
-          violations: processedViolations,
+          violations: filteredViolations,
           correctedText: correctedText,
           originalText: originalText,
           confidence: Math.min(1.0, Math.max(0.85, result.confidence || 0.90)),
@@ -992,6 +1112,27 @@ if (cachedGuidelinesHash === guidelinesHash && guidelinesCache) {
 
     const preFilteredCount = results.filter(r => r.preFiltered).length;
     const geminiAnalyzedCount = uncachedLayers.length;
+
+    // Debug logging for false positives analysis
+    if (process.env.DEBUG_ANALYSIS) {
+      const fpCandidates = results.filter(r =>
+        r.violations.some(v =>
+          /date|time|please|Mon|Tue|Wed|Thu|Fri|Sat|Sun|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec/.test(v.ruleDescription || '') &&
+          !r.correctedText.includes(v.suggested) // self-corrected?
+        )
+      );
+      if (fpCandidates.length > 0) {
+        console.warn(`⚠️ Potential false positives detected:`, fpCandidates.map(r => ({
+          id: r.id,
+          original: r.originalText,
+          violations: r.violations.map(v => ({
+            original: v.original,
+            suggested: v.suggested,
+            rule: v.ruleDescription
+          }))
+        })));
+      }
+    }
 
     // Enhanced response with guidelines information
     const categoriesProcessed = [...new Set(guidelines.map(g => g.category))];
