@@ -1,26 +1,29 @@
 # Content Lint
 
-Content linting API for Figma plugin that analyzes UI text content against customizable guidelines using Google Gemini AI.
+Content linting API for Figma plugin that analyzes UI text content against customizable guidelines using Google Gemini AI and Amazon Nova AI.
 
 ## Description
 
-This API provides intelligent content analysis for Figma designs, helping maintain consistency in terminology, grammar, formatting, and style guidelines across design systems. It uses Google Gemini AI to identify violations and suggest corrections based on dynamic guidelines stored in a Supabase database.
+This API provides intelligent content analysis for Figma designs, helping maintain consistency in terminology, grammar, formatting, and style guidelines across design systems. It uses Google Gemini AI and Amazon Nova AI to identify violations and suggest corrections based on dynamic guidelines stored in a Supabase database.
 
 ## Features
 
 - **Dynamic Guideline Processing**: Automatically processes and applies guidelines from Supabase database
-- **AI-Powered Analysis**: Uses Google Gemini 2.0 Flash for accurate content linting
-- **Caching System**: Efficiently caches analysis results and corrected text relationships to reduce API calls
+- **AI-Powered Analysis**: Uses Google Gemini 2.5 Flash Lite and Amazon Nova 2 Lite for accurate content linting
+- **Multi-Model Support**: Support for multiple AI models with fallback capabilities
+- **Intelligent Caching**: Efficiently caches analysis results and corrected text relationships to reduce API calls
 - **Batch Processing**: Handles multiple text layers in parallel for better performance
 - **Figma Plugin Integration**: Designed specifically for Figma plugin content linting
 - **Timeout Protection**: Robust error handling and timeout management
 - **Customizable Rules**: Support for various guideline categories and rule types
+- **Bidirectional Relationship Cache**: Tracks text corrections and relationships for improved accuracy
+- **Auto-Adapting Prompts**: Dynamically generates prompts based on guideline structure
 
 ## Prerequisites
 
 - Node.js (>= 14.x)
 - Supabase account and database
-- Google AI Studio API key (for Gemini)
+- Google AI Studio API key (for Gemini) or OpenRouter API key (for Nova)
 
 ## Installation
 
@@ -46,8 +49,11 @@ cp .env.local.example .env.local
 SUPABASE_URL=your-supabase-project-url
 SUPABASE_ANON_KEY=your-supabase-anon-key
 
-# Google AI API Key
+# Google AI API Key (for Gemini)
 GEMINI_API_KEY=your-gemini-api-key
+
+# OpenRouter API Key (for Nova - optional, used as fallback)
+OPENROUTER_API_KEY=your-openrouter-api-key
 ```
 
 ## Project Structure
@@ -56,7 +62,6 @@ GEMINI_API_KEY=your-gemini-api-key
 content-lint/
 ├── api/
 │   └── analyze.js          # Main analysis endpoint
-├── lib/                    # Utility libraries
 ├── package.json            # Project dependencies and scripts
 ├── vercel.json            # Vercel deployment configuration
 ├── .gitignore             # Git ignore rules
@@ -86,9 +91,15 @@ Analyzes text content against guidelines and returns linting results.
     "optimizationHint": "batch-process",
     "totalLayers": 10,
     "estimatedCompliant": 5
-  }
+  },
+  "selectedModel": "gemini"
 }
 ```
+
+**Parameters:**
+- `textLayers` (array, required): Array of text layers to analyze
+- `clientHints` (object, optional): Optimization hints from client
+- `selectedModel` (string, optional): AI model to use ("gemini" or "nova", defaults to "gemini")
 
 **Response:**
 ```json
@@ -110,7 +121,8 @@ Analyzes text content against guidelines and returns linting results.
       "correctedText": "Contact us at help@company.com",
       "originalText": "Contact us at support@company.com",
       "confidence": 0.95,
-      "guidelinesVersion": "abc123..."
+      "guidelinesVersion": "abc123...",
+      "model": "Gemini 2.5 Flash Lite"
     }
   ],
   "guidelines_info": {
@@ -149,7 +161,7 @@ Returns API status and configuration information.
 ```json
 {
   "status": "dynamic-guideline-driven-system",
-  "model": "gemini-2.5-flash-dynamic",
+  "model": "gemini-2.5-flash-lite",
   "version": "8.0",
   "features": [
     "dynamic_guideline_processing",
@@ -157,7 +169,8 @@ Returns API status and configuration information.
     "scalable_analysis_system",
     "bidirectional_relationship_cache",
     "auto_adapting_prompts",
-    "robust_guidelines_handling"
+    "robust_guidelines_handling",
+    "multi_model_support"
   ],
   "timestamp": "2025-10-27T15:30:00.000Z"
 }
@@ -235,7 +248,8 @@ npm run deploy
 |----------|-------------|----------|
 | `SUPABASE_URL` | Supabase project URL | Yes |
 | `SUPABASE_ANON_KEY` | Supabase anonymous key | Yes |
-| `GEMINI_API_KEY` | Google Gemini API key | Yes |
+| `GEMINI_API_KEY` | Google Gemini API key | Yes (for Gemini model) |
+| `OPENROUTER_API_KEY` | OpenRouter API key | No (for Nova model fallback) |
 
 ## Error Handling
 
@@ -243,6 +257,7 @@ The API includes comprehensive error handling:
 - **Timeout Protection**: Prevents hanging requests with configurable timeouts
 - **Retry Logic**: Automatically retries failed analysis requests
 - **Fallback Responses**: Provides reasonable responses when analysis fails
+- **Model Fallback**: Falls back to alternative AI models when primary model fails
 - **Logging**: Detailed logging for debugging and monitoring
 
 ## Performance Optimizations
@@ -251,6 +266,19 @@ The API includes comprehensive error handling:
 - **Parallel Processing**: Processes multiple layers concurrently
 - **Optimized Prompts**: Dynamically generates prompts based on guidelines
 - **Timeout Protection**: Prevents long-running requests from blocking the system
+- **Relationship Tracking**: Bidirectional cache relationships improve accuracy and reduce redundant analyses
+
+## AI Models Supported
+
+### Google Gemini 2.5 Flash Lite
+- **Model**: `gemini-2.5-flash-lite`
+- **Key**: `GEMINI_API_KEY`
+- **Description**: Fast and accurate content analysis with comprehensive rule processing
+
+### Amazon Nova 2 Lite
+- **Model**: `amazon/nova-2-lite-v1:free`
+- **Key**: `OPENROUTER_API_KEY`
+- **Description**: Free tier model available through OpenRouter as fallback option
 
 ## Contributing
 
