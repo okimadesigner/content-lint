@@ -668,30 +668,27 @@ async function analyzeWithGeminiDynamic(textLayers, guidelines, guidelinesHash, 
     try {
       console.log(`🔍 Dynamic analysis: ${textLayers.length} layers, ${guidelines.length} guidelines, attempt ${3 - retries}`);
 
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`, {
-        method: 'POST',
-        signal: controller.signal,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [{
-              text: `${systemPrompt}\n\nANALYZE THESE TEXT LAYERS AGAINST ALL GUIDELINES:\n\n${JSON.stringify(textLayers.map(l => ({ id: l.id, text: l.text })))}`
-            }]
-          }],
-          generationConfig: {
-            temperature: 0.05,
-            topK: 40,
-            topP: 0.9,
-            maxOutputTokens: 4096,
+      const response = await fetch(
+        'https://openrouter.ai/api/v1/chat/completions',
+        {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': process.env.VERCEL_URL || 'https://content-lint.vercel.app'
           },
-          safetySettings: [
-            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" }
-          ]
-        })
-      });
+          body: JSON.stringify({
+            model: 'amazon/nova-2-lite-v1:free',
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: `ANALYZE THESE TEXT LAYERS:\n\n${JSON.stringify(textLayers.map(l => ({ id: l.id, text: l.text })))}` }
+            ],
+            temperature: 0.05,
+            max_tokens: 4096
+          })
+        }
+      );
 
       clearTimeout(timeoutId);
 
@@ -701,7 +698,7 @@ async function analyzeWithGeminiDynamic(textLayers, guidelines, guidelinesHash, 
       }
 
       const data = await response.json();
-      let content = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      let content = data?.choices?.[0]?.message?.content || '';
 
       content = content.trim()
         .replace(/```json\s*/gi, '')
@@ -966,9 +963,9 @@ export default async function handler(req, res) {
   }
 
   try {
-    if (!process.env.GEMINI_API_KEY) {
+    if (!process.env.OPENROUTER_API_KEY) {
       clearTimeout(globalTimeout);
-      return res.status(500).json({ success: false, error: 'Gemini API key missing' });
+      return res.status(500).json({ success: false, error: 'OpenRouter API key missing' });
     }
 
     const { textLayers, clientHints } = req.body || {};
