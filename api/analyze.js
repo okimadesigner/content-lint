@@ -6,6 +6,30 @@ import crypto from 'crypto';
 const MAX_LAYERS_PER_REQUEST = 25;
 const OPTIMAL_BATCH_SIZE = 12;
 
+// Add after the existing constants (around line 10):
+const MODEL_CONFIGS = {
+  gemini: {
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent',
+    envKey: 'GEMINI_API_KEY',
+    name: 'Gemini 2.5 Flash Lite',
+    parseResponse: (data) => data?.candidates?.[0]?.content?.parts?.[0]?.text || ''
+  },
+  nova: {
+    endpoint: 'https://openrouter.ai/api/v1/chat/completions',
+    model: 'amazon/nova-2-lite-v1:free',
+    envKey: 'OPENROUTER_API_KEY',
+    name: 'Amazon Nova 2 Lite',
+    parseResponse: (data) => data?.choices?.[0]?.message?.content || ''
+  },
+  qwen: {
+    endpoint: 'https://openrouter.ai/api/v1/chat/completions',
+    model: 'qwen/qwen3-4b:free',
+    envKey: 'OPENROUTER_API_KEY',
+    name: 'Qwen3 4B',
+    parseResponse: (data) => data?.choices?.[0]?.message?.content || ''
+  }
+};
+
 // Init Supabase
 let supabase;
 try {
@@ -653,52 +677,88 @@ function generateRuleDescriptions(rulesData, category) {
   return descriptions.length > 0 ? descriptions : [`Check ${category} compliance`];
 }
 
-// --- Enhanced Gemini analysis with dynamic guidelines ---
-async function analyzeWithGeminiDynamic(textLayers, guidelines, guidelinesHash, timeout = 15000) {
-  const systemPrompt = createDynamicSystemPrompt(guidelines, guidelinesHash);
+// --- Enhanced analysis with model router ---
+async function analyzeWithModel(textLayers, guidelines, guidelinesHash, selectedModel = 'gemini', timeout = 15000) {
+  const config = MODEL_CONFIGS[selectedModel];
+  if (!config) {
+    throw new Error(`Unknown model: ${selectedModel}`);
+  }
 
+  const systemPrompt = createDynamicSystemPrompt(guidelines, guidelinesHash);
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
-    console.log(`⚠️ Gemini timeout after ${timeout}ms for ${textLayers.length} layers`);
+    console.log(`⚠️ ${config.name} timeout after ${timeout}ms for ${textLayers.length} layers`);
     controller.abort();
   }, timeout);
 
   let retries = 2;
   while (retries > 0) {
     try {
-      console.log(`🔍 Dynamic analysis: ${textLayers.length} layers, ${guidelines.length} guidelines, attempt ${3 - retries}`);
+      console.log(`🔍 ${config.name} analysis: ${textLayers.length} layers, attempt ${3 - retries}`);
 
-      const response = await fetch(
-        'https://openrouter.ai/api/v1/chat/completions',
-        {
+      let response;
+
+      // Build request based on model type
+      if (selectedModel === 'gemini') {
+        // Gemini format
+        response = await fetch(`${config.endpoint}?key=${process.env[config.envKey]}`, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [{
+                text: `${systemPrompt}\n\nANALYZE THESE TEXT LAYERS AGAINST ALL GUIDELINES:\n\n${JSON.stringify(textLayers.map(l => ({ id: l.id, text: l.text })))}`
+              }]
+            }],
+            generationConfig: {
+              temperature: 0.05,
+              topK: 40,
+              topP: 0.9,
+              maxOutputTokens: 4096,
+            },
+            safetySettings: [
+              { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+              { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+              { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+              { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" }
+            ]
+          })
+        });
+      } else {
+        // OpenRouter format (Nova, Qwen)
+        response = await fetch(config.endpoint, {
           method: 'POST',
           signal: controller.signal,
           headers: {
-            'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            'Authorization': `Bearer ${process.env[config.envKey]}`,
             'Content-Type': 'application/json',
-            'HTTP-Referer': process.env.VERCEL_URL || 'https://content-lint.vercel.app'
+            'HTTP-Referer': process.env.VERCEL_URL || 'https://content-lint.vercel.app',
+            'X-Title': 'Axis Content Wand'
           },
           body: JSON.stringify({
-            model: 'amazon/nova-2-lite-v1:free',
+            model: config.model,
             messages: [
               { role: 'system', content: systemPrompt },
-              { role: 'user', content: `ANALYZE THESE TEXT LAYERS:\n\n${JSON.stringify(textLayers.map(l => ({ id: l.id, text: l.text })))}` }
+              { role: 'user', content: `ANALYZE THESE TEXT LAYERS AGAINST ALL GUIDELINES:\n\n${JSON.stringify(textLayers.map(l => ({ id: l.id, text: l.text })))}` }
             ],
             temperature: 0.05,
             max_tokens: 4096
           })
-        }
-      );
+        });
+      }
 
       clearTimeout(timeoutId);
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Gemini ${response.status}: ${errorText.slice(0, 100)}`);
+        throw new Error(`${config.name} ${response.status}: ${errorText.slice(0, 100)}`);
       }
 
       const data = await response.json();
-      let content = data?.choices?.[0]?.message?.content || '';
+
+      // Parse response using model-specific parser
+      let content = config.parseResponse(data);
 
       content = content.trim()
         .replace(/```json\s*/gi, '')
@@ -708,7 +768,7 @@ async function analyzeWithGeminiDynamic(textLayers, guidelines, guidelinesHash, 
         .trim();
 
       if (!content) {
-        throw new Error('Empty Gemini response');
+        throw new Error(`Empty ${config.name} response`);
       }
 
       const parsed = JSON.parse(content);
@@ -791,21 +851,22 @@ async function analyzeWithGeminiDynamic(textLayers, guidelines, guidelinesHash, 
           correctedText: correctedText,
           originalText: originalText,
           confidence: Math.min(1.0, Math.max(0.85, result.confidence || 0.90)),
-          guidelinesVersion: guidelinesHash
+          guidelinesVersion: guidelinesHash,
+          model: config.name // Track which model was used
         };
       });
 
-      console.log(`✅ Dynamic analysis complete: ${results.length} results, ${results.filter(r => r.hasViolations).length} with violations`);
+      console.log(`✅ ${config.name} analysis complete: ${results.length} results, ${results.filter(r => r.hasViolations).length} with violations`);
       return results;
 
     } catch (error) {
       retries--;
       clearTimeout(timeoutId);
       if (retries === 0) {
-        console.error(`❌ Gemini analysis failed:`, error.message);
+        console.error(`❌ ${config.name} analysis failed:`, error.message);
         throw error;
       }
-      console.warn(`Retrying analysis (${retries} attempts left)...`);
+      console.warn(`Retrying ${config.name} analysis (${retries} attempts left)...`);
     }
   }
 }
@@ -818,7 +879,7 @@ async function analyzeWithGeminiDynamicWithRelationships(textLayers, guidelines,
   }
 
   // Use single request for smaller counts
-  const results = await analyzeWithGeminiDynamic(textLayers, guidelines, guidelinesHash, timeout);
+  const results = await analyzeWithModel(textLayers, guidelines, guidelinesHash, 'gemini', timeout);
   await cacheCorrectionsAsCompliantWithRelationships(results, guidelinesHash);
   return results;
 }
@@ -846,7 +907,7 @@ async function analyzeWithGeminiDynamicBatched(textLayers, guidelines, guideline
 
       // Give each batch 80% of available time (they run in parallel)
       const batchTimeout = Math.floor(availableTime * 0.8);
-      const batchResults = await analyzeWithGeminiDynamic(batch, guidelines, guidelinesHash, batchTimeout);
+      const batchResults = await analyzeWithModel(batch, guidelines, guidelinesHash, 'gemini', batchTimeout);
 
       console.log(`✅ Batch ${i + 1} completed: ${batchResults.filter(r => r.hasViolations).length}/${batch.length} violations`);
       return batchResults;
@@ -963,12 +1024,25 @@ export default async function handler(req, res) {
   }
 
   try {
-    if (!process.env.OPENROUTER_API_KEY) {
+    const { textLayers, clientHints, selectedModel } = req.body || {};
+    const modelToUse = selectedModel || 'gemini'; // Default to Gemini if not specified
+
+    console.log(`📊 Using model: ${modelToUse}`);
+
+    // Validate model configuration and API keys
+    const modelConfig = MODEL_CONFIGS[modelToUse];
+    if (!modelConfig) {
       clearTimeout(globalTimeout);
-      return res.status(500).json({ success: false, error: 'OpenRouter API key missing' });
+      return res.status(400).json({ success: false, error: `Invalid model: ${modelToUse}` });
     }
 
-    const { textLayers, clientHints } = req.body || {};
+    if (!process.env[modelConfig.envKey]) {
+      clearTimeout(globalTimeout);
+      return res.status(500).json({
+        success: false,
+        error: `${modelConfig.name} API key missing (${modelConfig.envKey})`
+      });
+    }
 
     // ✅ ENFORCE BATCH-ONLY ARCHITECTURE
     if (!Array.isArray(textLayers) || textLayers.length === 0) {
@@ -1085,10 +1159,11 @@ if (cachedGuidelinesHash === guidelinesHash && guidelinesCache) {
           try {
             // ✅ SIMPLIFIED: No internal batching needed anymore
             // Single Gemini call handles ≤25 layers easily
-            const geminiResults = await analyzeWithGeminiDynamic(
+            const geminiResults = await analyzeWithModel(
               uncachedLayers,
               guidelines,
               guidelinesHash,
+              modelToUse,
               timeRemaining - 1000
             );
 
