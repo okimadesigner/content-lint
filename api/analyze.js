@@ -20,13 +20,6 @@ const MODEL_CONFIGS = {
     envKey: 'OPENROUTER_API_KEY',
     name: 'Amazon Nova 2 Lite',
     parseResponse: (data) => data?.choices?.[0]?.message?.content || ''
-  },
-  qwen: {
-    endpoint: 'https://openrouter.ai/api/v1/chat/completions',
-    model: 'qwen/qwen3-4b:free',
-    envKey: 'OPENROUTER_API_KEY',
-    name: 'Qwen3 4B',
-    parseResponse: (data) => data?.choices?.[0]?.message?.content || ''
   }
 };
 
