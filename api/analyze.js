@@ -14,13 +14,13 @@ const MODEL_CONFIGS = {
     name: 'Gemini 2.5 Flash Lite',
     parseResponse: (data) => data?.candidates?.[0]?.content?.parts?.[0]?.text || ''
   },
-  nova: {
-    endpoint: 'https://openrouter.ai/api/v1/chat/completions',
-    model: 'amazon/nova-2-lite-v1:free',
-    envKey: 'OPENROUTER_API_KEY',
-    name: 'Amazon Nova 2 Lite',
-    parseResponse: (data) => data?.choices?.[0]?.message?.content || ''
-  }
+llama: {
+  endpoint: 'https://openrouter.ai/api/v1/chat/completions',
+  model: 'meta-llama/llama-3.3-70b-instruct:free',  // ✅
+  envKey: 'OPENROUTER_API_KEY',
+  name: 'Llama 3.3 70B',
+  parseResponse: (data) => data?.choices?.[0]?.message?.content || ''
+}
 };
 
 // Init Supabase
