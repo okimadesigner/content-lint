@@ -1164,10 +1164,15 @@ if (cachedGuidelinesHash === guidelinesHash && guidelinesCache) {
             await cacheCorrectionsAsCompliantWithRelationships(geminiResults, guidelinesHash);
             results.push(...geminiResults);
 
-          } catch (err) {
-            console.error('Gemini analysis failed:', err.message);
-            results.push(...createOptimizedFallback(uncachedLayers, err.message, guidelinesHash));
-          }
+      } catch (err) {
+        console.error(`${modelConfig.name} analysis failed:`, err.message);
+        clearTimeout(globalTimeout);
+        return res.status(503).json({
+          success: false,
+          error: `AI analysis unavailable: ${err.message}`,
+          errorType: 'model_failure'
+        });
+      }
         }
       }
     }
