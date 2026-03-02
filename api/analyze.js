@@ -13,14 +13,7 @@ const MODEL_CONFIGS = {
     envKey: 'GEMINI_API_KEY',
     name: 'Gemini 2.5 Flash Lite',
     parseResponse: (data) => data?.candidates?.[0]?.content?.parts?.[0]?.text || ''
-  },
-llama: {
-  endpoint: 'https://openrouter.ai/api/v1/chat/completions',
-  model: 'meta-llama/llama-3.3-70b-instruct:free',  // ✅
-  envKey: 'OPENROUTER_API_KEY',
-  name: 'Llama 3.3 70B',
-  parseResponse: (data) => data?.choices?.[0]?.message?.content || ''
-}
+  }
 };
 
 // Init Supabase
@@ -1018,7 +1011,7 @@ export default async function handler(req, res) {
 
   try {
     const { textLayers, clientHints, selectedModel } = req.body || {};
-    const modelToUse = selectedModel || 'gemini'; // Default to Gemini if not specified
+    const modelToUse = 'gemini';
 
     console.log(`📊 Using model: ${modelToUse}`);
 
